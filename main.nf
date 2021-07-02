@@ -6,6 +6,11 @@ params.vcf_filepath = '/net/seq/data/projects/regulotyping/genotypes/genotype_pa
 params.regions_filepath = '/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/masterlist_DHSs_h.CD3+_nonovl_core_chunkIDs.bed'
 params.count_matrix = '/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/tag_counts/matrix_tagcounts.txt.gz'
 params.genome='/net/seq/data/genomes/human/GRCh38/noalts/GRCh38_no_alts'
+params.chunksize=20000000
+
+
+chromsizes="$params.genome"  + ".chrom_sizes"
+
 
 
 fasta_reference_filepath="$params.genome" + ".fa"
@@ -49,21 +54,6 @@ process annotate_regions {
 
 NORMED_COUNTS.into{NORMED_COUNTS_FILES;NORMED_COUNTS_REGIONS}
 
-process collect_chrs {
-	executor 'local'
-
-	input:
-	file(count_matrix) from NORMED_COUNTS_REGIONS.map{ it[0] }.first()
-
-	output:
-	stdout into CHRS
-
-	script:
-	"""
-	zcat ${count_matrix} | cut -f1 | tail -n +2 | sort | uniq
-	"""
-}
-
 // Select bi-allelic SNVs and make plink files
 process make_plink {
 	executor 'local'
@@ -92,26 +82,108 @@ process make_plink {
 	"""
 }
 
-process qtl_by_chr {
-	tag "${chr}"
+// Chunk genome up only look at regions with in the phenotype matrix
+process create_genome_chunks {
+	executor 'local'
 
-	publishDir params.outdir + '/qtl', mode: 'copy'
+	input:
+	file(count_matrix) from NORMED_COUNTS_REGIONS.map{ it[0] }
+	file 'chrom_sizes.txt' from file("${chromsizes}")
+	val chunksize from params.chunksize
+
+	output:
+	stdout into GENOME_CHUNKS
+
+	script:
+	"""
+	zcat ${count_matrix} | cut -f1-3 | sort-bed - > regions.bed
+
+	cat chrom_sizes.txt \
+  	| awk -v step=${chunksize} -v OFS="\\t" \
+		'{ \
+			for(i=step; i<=\$2; i+=step) { \
+				print \$1, i-step+1, i; \
+			} \
+			print \$1, i-step+1, \$2; \
+		}' \
+	| sort-bed - > chunks.bed
+
+	bedops -e 1 chunks.bed regions.bed | awk -v OFS="\\t" '{ print \$1":"\$2"-"\$3; }'
+	"""
+} 
+
+process qtl_by_region {
+	tag "${region}"
+
+	//publishDir params.outdir + '/qtl', mode: 'copy'
 
 	label 'gpu'
 
 	input: 
 	set file(count_matrix), file(count_matrix_index) from NORMED_COUNTS_FILES
-	each chr from CHRS.flatMap{ it.split() }
+	each region from GENOME_CHUNKS.flatMap{ it.split() }
 	file '*' from PLINK_FILES.collect()
 
 	output:
-	file "*.txt.gz" into QTL_PAIRS_NOMINAL
-	file "*.parquet" into QTL_EMPIRICAL
+	file "*.txt.gz" into QTL_EMPIRICAL
+	file "*.parquet" into QTL_PAIRS_NOMINAL
 
 	script:
 	"""
-	source /home/jvierstra/.local/share/venv/gpu/bin/activate
+	source /home/jvierstra/.local/share/venv/gpu-python3.8/bin/activate
 
-	qtl.py plink ${count_matrix} plink.eigenvec ${chr}
+	qtl.py plink ${count_matrix} plink.eigenvec ${region}
+	"""
+}
+
+process merge_permutations {
+	executor 'local'
+	
+	publishDir params.outdir + '/qtl', mode: 'copy'
+
+	module "R/4.0.5:python/3.8.10"
+
+	input:
+	file '*' from QTL_EMPIRICAL.collect()
+
+	output:
+	file 'all.phenotypes.txt.gz' into QTL_EMPIRICAL_SIGNIF
+
+	script:
+	"""
+	find \$PWD -name "chr*.txt.gz" > filelist.txt
+
+	merge_permutation_results.py filelist.txt all
+	"""
+}
+
+QTL_PAIRS_NOMINAL
+	.map{ it -> 
+		def names = (it.name.split(":")) 
+		tuple(names[0], it)
+	}
+	.groupTuple(by: 0)
+	.set{ QTL_PAIRS_NOMINAL_BY_CHR }
+
+process filter_nominal_pairs {
+	tag "${chr}"
+
+	publishDir params.outdir + '/qtl', mode: 'copy'
+
+	executor 'local'
+	module "python/3.6.4"
+
+	input:
+	set val(chr), file('*') from QTL_PAIRS_NOMINAL_BY_CHR 
+	file phenotypes_file from QTL_EMPIRICAL_SIGNIF
+
+	output:
+	file "${chr}.signifpairs.txt.gz" into QTL_PAIRS_SIGNIF_BY_CHR
+
+	script:
+	"""
+	ls *.parquet > filelist.txt
+
+	merge_nominal_results.py --fdr 0.05 ${phenotypes_file} filelist.txt ${chr}.signifpairs.txt.gz
 	"""
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import sys
+import os
 
 import torch
 
@@ -12,12 +13,19 @@ from tensorqtl import cis
 
 from pandas_plink import read_plink
 
+def unpack_region(s):
+    (chrom, coords) = s.split(":")
+    (start, end) = coords.split("-")
+    return chrom, int(start), int(end)
+
 plink_prefix_path = sys.argv[1]
 phenotype_bed_path = sys.argv[2]
 covariates_path = sys.argv[3]
-include_chrs = [sys.argv[4]]
+region = sys.argv[4]
 
-prefix = 'all'
+(region_chrom, region_start, region_end) = unpack_region(region)
+
+prefix = region
 output_dir = '.'
 
 
@@ -40,7 +48,7 @@ print("Loading phenotype data...")
 phenotype_df, phenotype_pos_df = tensorqtl.read_phenotype_bed(phenotype_bed_path)
 phenotype_sample_ids = phenotype_df.columns.tolist()
 
-select_phenotypes = phenotype_pos_df['chr'].isin(include_chrs).values
+select_phenotypes = (phenotype_pos_df['chr']==region_chrom) & (phenotype_pos_df['tss']>region_start) & (phenotype_pos_df['tss']<=region_end)
 phenotype_df = phenotype_df[select_phenotypes]
 phenotype_pos_df = phenotype_pos_df[select_phenotypes]
 
@@ -56,7 +64,13 @@ bed[np.isnan(bed)] = -1  # convert missing (NaN) to -1 for int8
 bed = bed.astype(np.int8, copy=False)
 
 # Filter chromosomes
-m = bim['chrom'].isin(include_chrs).values
+#m = bim['chrom'].isin(include_chrs).values
+
+windowed_region_start = (region_start - window)
+windowed_region_end = (region_end + window)
+
+m = (bim['chrom'].isin([region_chrom]).values) & (bim['pos']>windowed_region_start) & (bim['pos']<=windowed_region_end)
+
 bed = bed[m,:]
 bim = bim[m]
 bim.reset_index(drop=True, inplace=True)
@@ -65,13 +79,15 @@ bim['i'] = bim.index
 # Filter samples
 fam_sample_ids = fam['iid'].tolist()
 
-select_samples = list(set(phenotype_sample_ids) & set(fam_sample_ids))
+select_samples = sorted(list(set(phenotype_sample_ids) & set(fam_sample_ids)))
+
+covariates_df = covariates_df.loc[select_samples]
+phenotype_df = phenotype_df[select_samples]
+
 ix = [fam_sample_ids.index(i) for i in select_samples]
 
 fam = fam.loc[ix]
 bed = bed[:, ix]
-
-covariates_df = covariates_df.loc[select_samples]
 
 print("Found {} samples in both genotype and phenotype files!".format(len(ix)))
 
@@ -89,7 +105,7 @@ cis_empirical = cis.map_cis(genotype_df, variant_df, phenotype_df, phenotype_pos
                      covariates_df=covariates_df, window=window, 
                      maf_threshold=maf_threshold, nperm=permuations)
 
-out_file = os.path.join(output_dir, prefix +'.cis_qtl.' + include_chrs[0] + '.txt.gz')
+out_file = os.path.join(output_dir, prefix +'.cis_qtl.' + region_chrom + '.txt.gz')
 
 print("Writing results to {}...".format(out_file))
 
