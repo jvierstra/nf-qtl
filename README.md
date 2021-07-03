@@ -24,26 +24,26 @@ export NXF_VER=21.04.1
 
 ## Pipeline overview
 
-<detail><summary>Step 1: Normalize count matrix</summary>
+<details><summary>Step 1: Normalize count matrix</summary>
 <p></p>
-</detail>
+</details>
 
-<detail><summary>Step 2: Convert VCF to plink & generate population genetic structure covariates</summary>
+<details><summary>Step 2: Convert VCF to plink & generate population genetic structure covariates</summary>
 <p></p>
-</detail>
+</details>
 
-<detail><summary>Step 3: Chunk genome</summary>
+<details><summary>Step 3: Chunk genome</summary>
 <p></p>
-</detail>
+</details>
 
-<detail><summary>Step 4: Run QTL analysis for each chunk</summary>
+<details><summary>Step 4: Run QTL analysis for each chunk</summary>
 <p></p>
-</detail>
+</details>
 
-<detail><summary>Step 5: Compute FDR for permutation pass</summary>
+<details><summary>Step 5: Compute FDR for permutation pass</summary>
 <p></p>
-</detail>
+</details>
 
-<detail><summary>Step 6: Apply FDR to a variant-phenotye pairs</summary>
+<details><summary>Step 6: Apply FDR to a variant-phenotye pairs</summary>
 <p></p>
-</detail>
+</details>
