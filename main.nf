@@ -1,39 +1,38 @@
 #!/usr/bin/env nextflow
 
+params.vcf_file='/net/seq/data/projects/regulotyping/genotypes/genotype_panel/imputed_genotypes/chroms1-22.phaseI+II.annotated.ancestral.vcf.gz'
+params.count_matrix_file='/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/tag_counts/matrix_tagcounts.txt.gz'
+params.regions_file='/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/masterlist_DHSs_h.CD3+_nonovl_core_chunkIDs.bed'
+
+params.genome='/net/seq/data/genomes/human/GRCh38/noalts/GRCh38_no_alts'
+params.chunksize=25000000
+
 params.outdir='output'
 
-params.vcf_filepath = '/net/seq/data/projects/regulotyping/genotypes/genotype_panel/imputed_genotypes/chroms1-22.phaseI+II.annotated.ancestral.vcf.gz'
-params.regions_filepath = '/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/masterlist_DHSs_h.CD3+_nonovl_core_chunkIDs.bed'
-params.count_matrix = '/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/tag_counts/matrix_tagcounts.txt.gz'
-params.genome='/net/seq/data/genomes/human/GRCh38/noalts/GRCh38_no_alts'
-params.chunksize=20000000
+//DO NOT EDIT BELOW
+
+genome_fasta_file="$params.genome"  + ".fa"
+genome_chrom_sizes_file="$params.genome"  + ".chrom_sizes"
+genome_mappable_file="$params.genome" + ".K76.mappable_only.bed"
 
 
-chromsizes="$params.genome"  + ".chrom_sizes"
-
-
-
-fasta_reference_filepath="$params.genome" + ".fa"
-mappable="$params.genome" + ".K76.mappable_only.bed"
-
-
-process annotate_regions {
+process normalize_count_matrix {
 	executor 'local'
 
 	publishDir params.outdir, mode: 'copy'
 
 	input:
-	file 'regions.bed' from file(params.regions_filepath)
-	file 'genome.fa' from file(fasta_reference_filepath)
-	file 'genome.fa.fai' from file("${fasta_reference_filepath}.fai")
-	file 'mappable.bed' from file(mappable)
-
-	file 'matrix_counts.txt.gz' from file(params.count_matrix)
-	file 'genotypes.vcf.gz' from file(params.vcf_filepath)
+	file 'matrix_counts.txt.gz' from file(params.count_matrix_file)
+	file 'genotypes.vcf.gz' from file(params.vcf_file)
+	file 'regions.bed' from file(params.regions_file)
+	
+	file 'genome.fa' from file(genome_fasta_file)
+	file 'genome.fa.fai' from file("${genome_fasta_file}.fai")
+	file 'mappable.bed' from file(genome_mappable_file)
 
 	output:
 	file 'regions_annotated.bed.gz*'
-	set file('matrix_counts.norm.bed.gz'), file('matrix_counts.norm.bed.gz.tbi') into NORMED_COUNTS
+	set file('matrix_counts.norm.bed.gz'), file('matrix_counts.norm.bed.gz.tbi') into NORMED_COUNTS_FILES, NORMED_COUNTS_REGIONS
 
 	script:
 	"""
@@ -48,27 +47,23 @@ process annotate_regions {
 	normalize_counts.py regions_annotated.bed.gz matrix_counts.txt.gz samples.txt \
 	| bgzip -c > matrix_counts.norm.bed.gz
 	tabix -p bed matrix_counts.norm.bed.gz
-
 	"""
 }
 
-NORMED_COUNTS.into{NORMED_COUNTS_FILES;NORMED_COUNTS_REGIONS}
-
-// Select bi-allelic SNVs and make plink files
+// Select bi-allelic SNVs and make plink files; PCA on genotypes for covariates
 process make_plink {
 	executor 'local'
 
 	publishDir params.outdir + '/plink' , mode: 'copy'
 
 	input:
-	file 'genotypes.vcf.gz' from file(params.vcf_filepath)
+	file 'genotypes.vcf.gz' from file(params.vcf_file)
 
 	output:
 	file "plink.*" into PLINK_FILES
 
 	script:
 	"""
-
 	plink2 --make-bed \
     	--output-chr chrM \
     	--vcf genotypes.vcf.gz \
@@ -88,7 +83,7 @@ process create_genome_chunks {
 
 	input:
 	file(count_matrix) from NORMED_COUNTS_REGIONS.map{ it[0] }
-	file 'chrom_sizes.txt' from file("${chromsizes}")
+	file 'chrom_sizes.txt' from file(genome_chrom_sizes_file)
 	val chunksize from params.chunksize
 
 	output:
@@ -171,7 +166,7 @@ process filter_nominal_pairs {
 	publishDir params.outdir + '/qtl', mode: 'copy'
 
 	executor 'local'
-	module "python/3.6.4"
+	module 'python/3.6.4'
 
 	input:
 	set val(chr), file('*') from QTL_PAIRS_NOMINAL_BY_CHR 
