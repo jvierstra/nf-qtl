@@ -5,7 +5,7 @@ params.count_matrix_file='/net/seq/data/projects/regulotyping/dnase/by_celltype_
 params.regions_file='/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/masterlist_DHSs_h.CD3+_nonovl_core_chunkIDs.bed'
 
 params.genome='/net/seq/data/genomes/human/GRCh38/noalts/GRCh38_no_alts'
-params.chunksize=25000000
+params.chunksize=25000000 //be careful not set this too small or the qtl.py script gives a cryptic error
 
 params.outdir='output'
 
@@ -17,7 +17,9 @@ genome_mappable_file="$params.genome" + ".K76.mappable_only.bed"
 
 
 process normalize_count_matrix {
-	executor 'local'
+	executor 'slurm'
+
+	conda '/home/jvierstra/.local/miniconda3/envs/py3.8_tensorqtl'
 
 	publishDir params.outdir, mode: 'copy'
 
@@ -53,8 +55,8 @@ process normalize_count_matrix {
 // Select bi-allelic SNVs and make plink files; PCA on genotypes for covariates
 process make_plink {
 	executor 'local'
-
-	publishDir params.outdir + '/plink' , mode: 'copy'
+	memory '16G'
+	publishDir params.outdir + '/plink' , mode: 'symlink'
 
 	input:
 	file 'genotypes.vcf.gz' from file(params.vcf_file)
@@ -67,6 +69,7 @@ process make_plink {
 	plink2 --make-bed \
     	--output-chr chrM \
     	--vcf genotypes.vcf.gz \
+        --keep-allele-order \
     	--snps-only \
     	--out plink
 
@@ -80,6 +83,7 @@ process make_plink {
 // Chunk genome up only look at regions with in the phenotype matrix
 process create_genome_chunks {
 	executor 'local'
+	memory '4G'
 
 	input:
 	file(count_matrix) from NORMED_COUNTS_REGIONS.map{ it[0] }
@@ -108,11 +112,12 @@ process create_genome_chunks {
 } 
 
 process qtl_by_region {
-	tag "${region}"
+	tag "${region}"    
+	label "gpu"
 
-	//publishDir params.outdir + '/qtl', mode: 'copy'
+    conda '/home/jvierstra/.local/miniconda3/envs/py3.8_tensorqtl'
 
-	label 'gpu'
+    publishDir params.outdir + '/nominal', mode: 'symlink', pattern: '*.parquet'
 
 	input: 
 	set file(count_matrix), file(count_matrix_index) from NORMED_COUNTS_FILES
@@ -125,18 +130,18 @@ process qtl_by_region {
 
 	script:
 	"""
-	source /home/jvierstra/.local/share/venv/gpu-python3.8/bin/activate
-
 	qtl.py plink ${count_matrix} plink.eigenvec ${region}
 	"""
 }
 
 process merge_permutations {
-	executor 'local'
+	executor 'slurm'
 	
-	publishDir params.outdir + '/qtl', mode: 'copy'
+    conda '/home/jvierstra/.local/miniconda3/envs/py3.8_tensorqtl'
 
-	module "R/4.0.5:python/3.8.10"
+	module "R/4.0.5"
+
+	publishDir params.outdir + '/qtl', mode: 'symlink'
 
 	input:
 	file '*' from QTL_EMPIRICAL.collect()
@@ -163,10 +168,12 @@ QTL_PAIRS_NOMINAL
 process filter_nominal_pairs {
 	tag "${chr}"
 
-	publishDir params.outdir + '/qtl', mode: 'copy'
+	executor 'slurm'
 
-	executor 'local'
-	module 'python/3.6.4'
+    conda '/home/jvierstra/.local/miniconda3/envs/py3.8_tensorqtl'
+
+
+	publishDir params.outdir + '/qtl', mode: 'copy'
 
 	input:
 	set val(chr), file('*') from QTL_PAIRS_NOMINAL_BY_CHR 

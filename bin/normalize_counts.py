@@ -11,7 +11,7 @@ from sklearn.preprocessing import QuantileTransformer
 
 regions_annotation_filepath = sys.argv[1] #'/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/masterlist_DHSs_h.CD3+_nonovl_core_chunkIDs.gc-content.K76mappable.bed'
 raw_tag_counts_filepath =  sys.argv[2] #'/net/seq/data/projects/regulotyping/dnase/by_celltype_donor/h.CD3+/index/tag_counts/matrix_tagcounts.txt.gz'
-samples_filepath = sys.argv[3] #'/tmp/samples.txt'
+indivs_filepath = sys.argv[3] #'/tmp/samples.txt'
 exclude_chrs = ['chrX', 'chrY', 'chrM']
 
 raw_tag_counts = pd.read_csv(raw_tag_counts_filepath, header=0, index_col=0, delimiter="\t")
@@ -20,8 +20,8 @@ regions_annotations = pd.read_csv(regions_annotation_filepath, header=None, deli
 regions_annotations.columns = ["chr", "start", "end", "n_bases", "n_gc", "percent_gc", "n_mappable", "region_id", "mid"]
 regions_annotations.set_index("region_id", inplace=True)
 
-with open(samples_filepath) as f:
-	samples = [line.rstrip() for line in f]
+with open(indivs_filepath) as f:
+	indivs = [line.rstrip() for line in f]
 
 # Check whether files match
 assert raw_tag_counts.index.equals(regions_annotations.index), "Counts and annotation files do not match!"
@@ -32,7 +32,8 @@ raw_tag_counts = raw_tag_counts.loc[filtered_regions]
 regions_annotations = regions_annotations.loc[filtered_regions]
 
 # Get relevant samples (e.g., to match VCF file)
-sample_cols = raw_tag_counts.columns.intersection(samples)
+#sample_cols = raw_tag_counts.columns.intersection(samples)
+sample_cols = raw_tag_counts.columns[raw_tag_counts.columns.str.split('>').str[0].isin(indivs)]
 raw_tag_counts = raw_tag_counts[sample_cols]
 
 # Normalize by total counts & # of mappable base in element
